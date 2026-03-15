@@ -48,8 +48,11 @@ type AdaptiveLimiter struct {
 	emaAlpha   float64      // smoothing factor ∈ (0,1]
 
 	// Controller state (written only by the controller goroutine)
-	currentRate float64 // protected by controller-only writes; read atomically via rateAtomic
-	rateAtomic  atomic.Int64
+	// currentRate is the authoritative float64 state for the PD accumulator.
+	// rateAtomic stores the same value bit-for-bit (via math.Float64bits) for
+	// lock-free reads from Allow() and CurrentRate().
+	currentRate float64
+	rateAtomic  atomic.Uint64 // stores math.Float64bits(currentRate)
 	prevError   float64
 
 	// Enforcer – per-interval request counter
@@ -117,7 +120,7 @@ func NewAdaptiveLimiter(cfg AdaptiveConfig) *AdaptiveLimiter {
 		currentRate:   cfg.InitialRate,
 		done:          make(chan struct{}),
 	}
-	al.rateAtomic.Store(int64(cfg.InitialRate))
+	al.rateAtomic.Store(math.Float64bits(cfg.InitialRate))
 	al.latencyEMA.Store(int64(cfg.TargetLatency)) // start at target
 
 	go al.controlLoop()
@@ -145,16 +148,16 @@ func (al *AdaptiveLimiter) CurrentLatency() time.Duration {
 
 // CurrentRate returns the current allowed request rate (req/s).
 func (al *AdaptiveLimiter) CurrentRate() float64 {
-	return float64(al.rateAtomic.Load())
+	return math.Float64frombits(al.rateAtomic.Load())
 }
 
 // Allow is the Enforcer hot path. It returns true if the request is within
 // the current rate limit for this interval window, false otherwise.
 // O(1), lock-free.
 func (al *AdaptiveLimiter) Allow() bool {
-	rate := al.rateAtomic.Load()
+	rate := math.Float64frombits(al.rateAtomic.Load())
 	count := al.counter.Add(1)
-	return count <= rate
+	return float64(count) <= rate
 }
 
 // Stop terminates the background controller goroutine.
@@ -199,5 +202,5 @@ func (al *AdaptiveLimiter) tick(dt float64) {
 	// Clamp to [1, MaxRate]
 	newRate = math.Max(1, math.Min(al.maxRate, newRate))
 	al.currentRate = newRate
-	al.rateAtomic.Store(int64(newRate))
+	al.rateAtomic.Store(math.Float64bits(newRate))
 }

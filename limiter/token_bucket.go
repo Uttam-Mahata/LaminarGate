@@ -25,15 +25,15 @@ type TokenBucketLimiter struct {
 }
 
 type tbState struct {
-	tokens    float64
-	lastRefil time.Time
+	tokens     float64
+	lastRefill time.Time
 }
 
 // NewTokenBucketLimiter creates a TokenBucketLimiter with the given rate
 // (tokens/second) and bucket capacity. The bucket starts full.
 func NewTokenBucketLimiter(rate, capacity float64) *TokenBucketLimiter {
 	tbl := &TokenBucketLimiter{rate: rate, capacity: capacity}
-	initial := &tbState{tokens: capacity, lastRefil: time.Now()}
+	initial := &tbState{tokens: capacity, lastRefill: time.Now()}
 	tbl.state.Store(initial)
 	return tbl
 }
@@ -43,7 +43,7 @@ func (tbl *TokenBucketLimiter) Allow() bool {
 	now := time.Now()
 	for {
 		old := tbl.state.Load()
-		elapsed := now.Sub(old.lastRefil).Seconds()
+		elapsed := now.Sub(old.lastRefill).Seconds()
 		newTokens := old.tokens + elapsed*tbl.rate
 		if newTokens > tbl.capacity {
 			newTokens = tbl.capacity
@@ -51,7 +51,7 @@ func (tbl *TokenBucketLimiter) Allow() bool {
 		if newTokens < 1 {
 			return false
 		}
-		next := &tbState{tokens: newTokens - 1, lastRefil: now}
+		next := &tbState{tokens: newTokens - 1, lastRefill: now}
 		if tbl.state.CompareAndSwap(old, next) {
 			return true
 		}
